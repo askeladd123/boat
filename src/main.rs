@@ -11,6 +11,9 @@ use bevy_rapier3d::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
+use utils::*;
+
+mod utils;
 
 fn main() {
     App::new()
@@ -48,6 +51,8 @@ fn main() {
                 move_camera,
                 add_env_forces,
                 update_values,
+                read_sensor_events,
+                dock_menu,
             )
                 .run_if(in_state(AssetState::Loaded)),
         )
@@ -79,9 +84,33 @@ struct MovingObject;
 #[derive(Component)]
 struct Camera;
 
+#[derive(Component)]
+struct DockMenu;
+
 #[derive(Resource)]
 struct AssetsVital {
     bboxes: Handle<Gltf>,
+}
+
+#[derive(Default, Debug)]
+enum DockState {
+    #[default]
+    TooFar,
+    CloseTo(Entity),
+    DockedTo(Entity),
+}
+
+#[derive(Resource)]
+struct PlayerData {
+    dock_state: DockState,
+}
+
+impl Default for PlayerData {
+    fn default() -> Self {
+        Self {
+            dock_state: DockState::default(),
+        }
+    }
 }
 
 #[derive(Resource)]
@@ -117,6 +146,79 @@ impl Default for ConfigValues {
     }
 }
 
+fn dock_menu(
+    mut cmd: Commands,
+    mut sensor_query: Query<(Entity, &Transform), With<Sensor>>,
+    mut dock_menu_query: Query<
+        (&mut Visibility, &mut Transform),
+        (With<DockMenu>, Without<Sensor>),
+    >,
+    mut player_query: Query<&Velocity, With<Player>>,
+    mut player_data: ResMut<PlayerData>,
+) {
+    const MAX_DOCK_VEL: f32 = 0.1;
+    const MIN_UNDOCK_VEL: f32 = 0.5;
+
+    let mut speed = length_xz(&player_query.single_mut().linvel);
+    let (mut menu_visibility, mut menu_transform) = dock_menu_query.single_mut();
+
+    match player_data.dock_state {
+        DockState::TooFar => {
+            *menu_visibility = Visibility::Hidden;
+        }
+        DockState::CloseTo(sensor) => {
+            if speed < MAX_DOCK_VEL {
+                player_data.dock_state = DockState::DockedTo(sensor);
+
+                let mut transform = sensor_query
+                    .iter()
+                    .find_map(|(k, v)| if k == sensor { Some(v) } else { None })
+                    .unwrap()
+                    .clone();
+
+                *menu_visibility = Visibility::Visible;
+                *menu_transform = transform;
+            }
+        }
+        DockState::DockedTo(sensor) => {
+            if MIN_UNDOCK_VEL < speed {
+                player_data.dock_state = DockState::CloseTo(sensor);
+
+                *menu_visibility = Visibility::Hidden;
+            }
+        }
+    }
+}
+
+fn read_sensor_events(
+    mut collision_events: EventReader<CollisionEvent>,
+    mut player_query: Query<Entity, With<Player>>,
+    mut sensor_query: Query<Entity, With<Sensor>>,
+    mut player_data: ResMut<PlayerData>,
+) {
+    let mut player = player_query.single_mut();
+
+    for event in collision_events.iter() {
+        match event {
+            CollisionEvent::Started(entity1, entity2, ..) if *entity1 == player => {
+                for sensor in sensor_query.iter() {
+                    if sensor == *entity2 {
+                        player_data.dock_state = DockState::CloseTo(sensor.clone());
+                    }
+                }
+            }
+            CollisionEvent::Stopped(entity1, entity2, ..) if *entity1 == player => {
+                for sensor in sensor_query.iter() {
+                    if sensor == *entity2 {
+                        player_data.dock_state = DockState::TooFar;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 fn update_values(
     config: Res<Config>,
     mut events: EventReader<ConfigValuesChanged>,
@@ -146,6 +248,7 @@ fn spawn_entities(mut cmd: Commands) {
             },
             ..default()
         },
+        ActiveEvents::COLLISION_EVENTS,
     ));
     cmd.spawn(Camera);
     cmd.insert_resource(AmbientLight {
@@ -157,6 +260,8 @@ fn spawn_entities(mut cmd: Commands) {
         saved: true,
         values: ConfigValues::default(),
     });
+    cmd.spawn(DockMenu);
+    cmd.insert_resource(PlayerData::default());
 }
 
 fn load_config(mut config: ResMut<Config>) {
@@ -175,6 +280,7 @@ fn start_loading_assets(
     asset_server: Res<AssetServer>,
     player: Query<Entity, With<Player>>,
     camera: Query<Entity, With<Camera>>,
+    dock_menu: Query<Entity, With<DockMenu>>,
 ) {
     // these assets are vital, and the rest of the program need to wait for them
     cmd.insert_resource(AssetsVital {
@@ -203,6 +309,11 @@ fn start_loading_assets(
     });
     cmd.spawn(SceneBundle {
         scene: asset_server.load("ocean.glb#Scene0"),
+        ..default()
+    });
+    cmd.entity(dock_menu.single()).insert(SceneBundle {
+        scene: asset_server.load("persons.glb#Scene0"),
+        visibility: Visibility::Hidden,
         ..default()
     });
 }
@@ -267,6 +378,23 @@ fn add_vital_assets(
         })
         .collect::<HashMap<String, (TransformBundle, Collider)>>();
 
+    let mut colliders_cylinder = gltf
+        .named_nodes
+        .iter()
+        .filter_map(|(k, v)| match k.strip_suffix("-cylinder") {
+            None => None,
+            Some(stripped) => {
+                let node = assets_gltf_nodes.get(&v).unwrap();
+
+                let transform = TransformBundle::from(node.transform);
+
+                let collider = Collider::cylinder(3., 1.);
+                Some((stripped.into(), (transform, collider)))
+            }
+        })
+        .collect::<HashMap<String, (TransformBundle, Collider)>>();
+
+    // spawn colliders
     cmd.entity(player.single())
         .insert(colliders_trimesh["boat"].1.clone());
 
@@ -274,6 +402,13 @@ fn add_vital_assets(
     let island2 = colliders_trimesh["island-2"].clone();
     cmd.spawn((RigidBody::Fixed, island1.0, island1.1));
     cmd.spawn((RigidBody::Fixed, island2.0, island2.1));
+
+    let island1 = colliders_cylinder["island-1"].clone();
+    let island2 = colliders_cylinder["island-2"].clone();
+    cmd.spawn((Sensor, island1.0, island1.1)); //, ActiveEvents::COLLISION_EVENTS));
+    cmd.spawn((Sensor, island2.0, island2.1));
+
+    cmd.remove_resource::<AssetsVital>();
 }
 
 fn update_ui(
@@ -283,10 +418,14 @@ fn update_ui(
     mut writer_config_changed: EventWriter<ConfigValuesChanged>,
     mut config: ResMut<Config>,
     mut debug_mode: ResMut<DebugRenderContext>,
+    player_data: Res<PlayerData>,
+    player_query: Query<&Velocity, With<Player>>,
 ) {
     use egui::*;
     //TODO: add a reload config button
     egui::Window::new("debug control panel").show(contexts.ctx_mut(), |ui| {
+        let player_speed_xz = length_xz(&player_query.single().linvel);
+
         match state.get() {
             AssetState::Loading => ui.label("loading assets for vital functions"),
             AssetState::Loaded => ui.label("press arrow keys to move the boat"),
@@ -322,6 +461,9 @@ fn update_ui(
             }
 
             ui.checkbox(&mut debug_mode.enabled, "render bbox");
+
+            ui.label(format!("docking state: {:?}", player_data.dock_state));
+            ui.label(format!("player speed: {:.2}", player_speed_xz,));
         }); // diractional light
         ui.collapsing("graphics", |ui| {
             if ui
