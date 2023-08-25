@@ -3,11 +3,14 @@
 use bevy::{
     gltf::{Gltf, GltfMesh, GltfNode},
     log::LogPlugin,
+    pbr::DirectionalLightShadowMap,
     prelude::{default, *},
 };
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
 use bevy_rapier3d::prelude::*;
-use std::{collections::HashMap, rc::Rc};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::collections::HashMap;
 
 fn main() {
     App::new()
@@ -21,25 +24,43 @@ fn main() {
         )
         .add_plugins((
             RapierPhysicsPlugin::<NoUserData>::default(),
-            // RapierDebugRenderPlugin::default(),
+            RapierDebugRenderPlugin::default().disabled(),
         ))
         .add_plugins(EguiPlugin)
         .add_state::<AssetState>()
+        .add_event::<ConfigSave>()
+        .add_event::<ConfigValuesChanged>()
         .add_systems(Startup, spawn_entities)
-        .add_systems(PostStartup, start_loading_assets)
+        .add_systems(PostStartup, (start_loading_assets, load_config))
         .add_systems(
             Update,
             check_if_vital_assets_loaded.run_if(in_state(AssetState::Loading)),
         )
-        .add_systems(Update, update_ui)
-        .add_systems(OnEnter(AssetState::Loaded), add_vital_assets)
+        .add_systems(Update, (update_ui, save_config))
+        .add_systems(
+            OnEnter(AssetState::Loaded),
+            (on_loaded_general, add_vital_assets),
+        )
         .add_systems(
             Update,
-            (keyboard_input_system, move_camera, add_env_forces)
+            (
+                keyboard_input_system,
+                move_camera,
+                add_env_forces,
+                update_values,
+            )
                 .run_if(in_state(AssetState::Loaded)),
         )
         .run();
 }
+
+/// fires when the config needs to save
+#[derive(Event)]
+struct ConfigSave;
+
+/// fires when the config is changed
+#[derive(Event)]
+struct ConfigValuesChanged;
 
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Hash, States)]
 enum AssetState {
@@ -53,20 +74,63 @@ enum AssetState {
 struct Player;
 
 #[derive(Component)]
-struct Land;
-
-#[derive(Component)]
 struct MovingObject;
 
 #[derive(Component)]
 struct Camera;
 
-#[derive(Component)]
-struct LandCollider;
-
 #[derive(Resource)]
 struct AssetsVital {
-    bbox: HashMap<String, Handle<Gltf>>,
+    bboxes: Handle<Gltf>,
+}
+
+#[derive(Resource)]
+struct Config {
+    saved: bool,
+    values: ConfigValues,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ConfigValues {
+    drag_c: f32,
+    avg_boat_height: f32,
+    floating_c: f32,
+    drag_ang_c: f32,
+    light_dir_color: Color,
+    light_amb_color: Color,
+    light_dir_lum: f32,
+    light_amb_lum: f32,
+}
+
+impl Default for ConfigValues {
+    fn default() -> Self {
+        Self {
+            drag_c: 0.05,
+            avg_boat_height: 1.,
+            floating_c: 1.,
+            drag_ang_c: 0.05,
+            light_dir_color: Color::rgb(0.98, 0.97, 0.8),
+            light_dir_lum: 50_000.,
+            light_amb_color: Color::rgb(0.5, 0.5, 0.8),
+            light_amb_lum: 1.,
+        }
+    }
+}
+
+fn update_values(
+    config: Res<Config>,
+    mut events: EventReader<ConfigValuesChanged>,
+    mut light_amb: ResMut<AmbientLight>,
+    mut light_dir: Query<&mut DirectionalLight>,
+) {
+    for _ in events.iter() {
+        let mut light_dir = light_dir.single_mut();
+        light_amb.color = config.values.light_amb_color;
+        light_amb.brightness = config.values.light_amb_lum;
+        light_dir.color = config.values.light_dir_color;
+        light_dir.illuminance = config.values.light_dir_lum;
+        light_dir.shadows_enabled = true;
+    }
 }
 
 fn spawn_entities(mut cmd: Commands) {
@@ -84,6 +148,26 @@ fn spawn_entities(mut cmd: Commands) {
         },
     ));
     cmd.spawn(Camera);
+    cmd.insert_resource(AmbientLight {
+        color: Color::rgb(0.5, 0.5, 0.8),
+        brightness: 1.0,
+    });
+    cmd.insert_resource(DirectionalLightShadowMap { size: 4090 });
+    cmd.insert_resource(Config {
+        saved: true,
+        values: ConfigValues::default(),
+    });
+}
+
+fn load_config(mut config: ResMut<Config>) {
+    match std::fs::read_to_string("config.json") {
+        Ok(str) => match serde_json::from_str(&str) {
+            Ok(v) => config.values = v,
+
+            Err(e) => error!("failed to parse json file; {e}"),
+        },
+        Err(e) => error!("failed to read config file: {e}"),
+    }
 }
 
 fn start_loading_assets(
@@ -94,21 +178,21 @@ fn start_loading_assets(
 ) {
     // these assets are vital, and the rest of the program need to wait for them
     cmd.insert_resource(AssetsVital {
-        bbox: HashMap::from([
-            ("boats".to_string(), asset_server.load("boats-bbox.glb")),
-            ("islands".to_string(), asset_server.load("islands-bbox.glb")),
-        ]),
+        bboxes: asset_server.load("bboxes.glb"),
     });
 
-    // these assets are not vital, so the rest of the program does not need to wait for them
-    cmd.entity(camera.single()).insert(SceneBundle {
-        scene: asset_server.load("cameras.glb#Scene0"),
-        ..default()
-    });
+    //TODO: this directional light is used before it's guaranteed loaded, but for some reason it doesn't cause a crash
     cmd.spawn(SceneBundle {
         scene: asset_server.load("lights.glb#Scene0"),
         ..default()
     });
+
+    cmd.entity(camera.single()).insert(SceneBundle {
+        scene: asset_server.load("cameras.glb#Scene0"),
+        ..default()
+    });
+
+    // these assets are not vital, so the rest of the program does not need to wait for them
     cmd.entity(player.single()).insert(SceneBundle {
         scene: asset_server.load("boats.glb#Scene0"),
         ..default()
@@ -128,11 +212,22 @@ fn check_if_vital_assets_loaded(
     handles: Res<AssetsVital>,
     mut next_state: ResMut<NextState<AssetState>>,
 ) {
-    match asset_server.get_group_load_state(handles.bbox.iter().map(|kv| kv.1.id())) {
+    match asset_server.get_group_load_state([handles.bboxes.id()]) {
         bevy::asset::LoadState::Loaded => next_state.set(AssetState::Loaded),
         bevy::asset::LoadState::Failed => next_state.set(AssetState::Failed),
         _ => {}
     }
+}
+
+fn on_loaded_general(
+    mut light: Query<&mut DirectionalLight>,
+    mut writer: EventWriter<ConfigValuesChanged>,
+) {
+    // make use the config values are used once loaded
+    writer.send(ConfigValuesChanged);
+
+    let mut light = light.single_mut();
+    light.shadows_enabled = true;
 }
 
 fn add_vital_assets(
@@ -144,52 +239,165 @@ fn add_vital_assets(
     assets_mesh: Res<Assets<Mesh>>,
     player: Query<Entity, With<Player>>,
 ) {
-    let mesh = assets_mesh
-        .get(
-            &assets_gltf_mesh
-                .get(&assets_gltf.get(&handles.bbox["boats"]).unwrap().meshes[0])
-                .unwrap()
-                .primitives[0]
-                .mesh,
-        )
-        .unwrap();
+    // convert colliders
+    let gltf = assets_gltf.get(&handles.bboxes).unwrap();
+
+    let mut colliders_trimesh = gltf
+        .named_nodes
+        .iter()
+        .filter_map(|(k, v)| match k.strip_suffix("-trimesh") {
+            None => None,
+            Some(stripped) => {
+                let node = assets_gltf_nodes.get(&v).unwrap();
+
+                let transform = TransformBundle::from(node.transform);
+                let mesh = assets_mesh
+                    .get(
+                        &assets_gltf_mesh
+                            .get(&node.mesh.as_ref().unwrap())
+                            .unwrap()
+                            .primitives[0]
+                            .mesh,
+                    )
+                    .unwrap();
+                let collider =
+                    Collider::from_bevy_mesh(&mesh, &ComputedColliderShape::TriMesh).unwrap();
+                Some((stripped.into(), (transform, collider)))
+            }
+        })
+        .collect::<HashMap<String, (TransformBundle, Collider)>>();
 
     cmd.entity(player.single())
-        .insert(Collider::from_bevy_mesh(&mesh, &ComputedColliderShape::ConvexHull).unwrap());
+        .insert(colliders_trimesh["boat"].1.clone());
 
-    let gltf = assets_gltf.get(&handles.bbox["islands"]).unwrap();
-    for node in gltf
-        .nodes
-        .iter()
-        .map(|node_handle| assets_gltf_nodes.get(node_handle).unwrap())
-    {
-        let mesh = assets_mesh
-            .get(
-                &assets_gltf_mesh
-                    .get(&node.mesh.clone().unwrap())
-                    .unwrap()
-                    .primitives[0]
-                    .mesh,
-            )
-            .unwrap();
-        let transform = node.transform;
-        cmd.spawn((
-            RigidBody::Fixed,
-            Collider::from_bevy_mesh(&mesh, &ComputedColliderShape::TriMesh).unwrap(),
-            LandCollider,
-            TransformBundle::from(transform),
-        ));
-    }
+    let island1 = colliders_trimesh["island-1"].clone();
+    let island2 = colliders_trimesh["island-2"].clone();
+    cmd.spawn((RigidBody::Fixed, island1.0, island1.1));
+    cmd.spawn((RigidBody::Fixed, island2.0, island2.1));
 }
 
-fn update_ui(state: Res<State<AssetState>>, mut contexts: EguiContexts) {
-    egui::Window::new("debug control panel").show(contexts.ctx_mut(), |ui| match state.get() {
-        AssetState::Loading => ui.label("loading assets for vital functions"),
-        AssetState::Loaded => ui.label("press arrow keys to move the boat"),
-        AssetState::Failed => {
-            ui.label("assets failed to load for some reason, check console for detailed errors")
+fn update_ui(
+    state: Res<State<AssetState>>,
+    mut contexts: EguiContexts,
+    mut writer_config_save: EventWriter<ConfigSave>,
+    mut writer_config_changed: EventWriter<ConfigValuesChanged>,
+    mut config: ResMut<Config>,
+    mut debug_mode: ResMut<DebugRenderContext>,
+) {
+    use egui::*;
+    //TODO: add a reload config button
+    egui::Window::new("debug control panel").show(contexts.ctx_mut(), |ui| {
+        match state.get() {
+            AssetState::Loading => ui.label("loading assets for vital functions"),
+            AssetState::Loaded => ui.label("press arrow keys to move the boat"),
+            AssetState::Failed => {
+                ui.label("assets failed to load for some reason, check console for detailed errors")
+            }
+        };
+        ui.separator();
+        // the reason these are not combined with || operator is that the compiler optimizes, and then only the first will show
+
+        let mut changed = false;
+
+        ui.collapsing("physics", |ui| {
+            if ui
+                .add(egui::Slider::new(&mut config.values.drag_c, 0.0..=0.3).text("drag c"))
+                .changed()
+                | ui.add(
+                    egui::Slider::new(&mut config.values.floating_c, 0.0..=5.).text("floating c"),
+                )
+                .changed()
+                | ui.add(
+                    egui::Slider::new(&mut config.values.drag_ang_c, 0.0..=0.3)
+                        .text("angular drag c"),
+                )
+                .changed()
+                | ui.add(
+                    egui::Slider::new(&mut config.values.avg_boat_height, 0.0..=5.)
+                        .text("average boat height"),
+                )
+                .changed()
+            {
+                changed = true;
+            }
+
+            ui.checkbox(&mut debug_mode.enabled, "render bbox");
+        }); // diractional light
+        ui.collapsing("graphics", |ui| {
+            if ui
+                .add(
+                    egui::Slider::new(&mut config.values.light_dir_lum, 0.0..=100_000.)
+                        .text("directional light illuminance"),
+                )
+                .changed()
+                | ui.add(
+                    egui::Slider::new(&mut config.values.light_amb_lum, 0.0..=3.)
+                        .text("ambient light illuminance"),
+                )
+                .changed()
+            {
+                changed = true;
+            }
+
+            // directional light
+            ui.horizontal(|ui| {
+                let mut buf = [
+                    config.values.light_dir_color.r(),
+                    config.values.light_dir_color.g(),
+                    config.values.light_dir_color.b(),
+                ];
+                if ui.color_edit_button_rgb(&mut buf).changed() {
+                    changed = true;
+                    config.values.light_dir_color = buf.into();
+                }
+                ui.label("directional light color")
+            });
+
+            // ambient light
+            ui.horizontal(|ui| {
+                let mut buf = [
+                    config.values.light_amb_color.r(),
+                    config.values.light_amb_color.g(),
+                    config.values.light_amb_color.b(),
+                ];
+                if ui.color_edit_button_rgb(&mut buf).changed() {
+                    changed = true;
+                    config.values.light_amb_color = buf.into();
+                }
+                ui.label("ambient light color")
+            });
+        });
+
+        // make sure config values is updated, and the file is saved
+        config.saved &= !changed;
+        if changed {
+            writer_config_changed.send(ConfigValuesChanged);
+        }
+
+        if ui
+            .add_enabled(
+                !config.saved,
+                if config.saved {
+                    egui::Button::new("config saved")
+                } else {
+                    egui::Button::new("save config")
+                },
+            )
+            .clicked()
+        {
+            writer_config_save.send(ConfigSave);
         }
     });
+}
+
+fn save_config(mut config: ResMut<Config>, mut events: EventReader<ConfigSave>) {
+    //TODO: check if writing json works on web
+    for _ in events.iter() {
+        match std::fs::write("config.json", json!(config.values).to_string()) {
+            Ok(_) => config.saved = true,
+            Err(e) => error!("could not save config file: {e}"),
+        }
+    }
 }
 
 fn move_camera(
@@ -228,12 +436,8 @@ fn keyboard_input_system(
 
 fn add_env_forces(
     mut floating_objects: Query<(&mut Transform, &mut Velocity), With<MovingObject>>,
+    config: Res<Config>,
 ) {
-    const AVG_BOAT_HEIGHT: f32 = 1.;
-    const FLOAT_C: f32 = 1.;
-    const DRAG_C: f32 = 0.05;
-    const DRAG_ANG_C: f32 = 0.05;
-
     //TODO: Transform trenger ikke være mut her
     for (trans, mut vel) in floating_objects.iter_mut() {
         // # bouancy from water
@@ -241,27 +445,27 @@ fn add_env_forces(
         let y = trans.translation.y;
         let mut v = 0.;
         if y < 0. {
-            if -y > AVG_BOAT_HEIGHT {
-                v = AVG_BOAT_HEIGHT * FLOAT_C;
+            if -y > config.values.avg_boat_height {
+                v = config.values.avg_boat_height * config.values.floating_c;
             } else {
-                v = -y * FLOAT_C;
+                v = -y * config.values.floating_c;
             }
         }
         vel.linvel.y += v;
         let inverse = -vel.linvel;
-        vel.linvel += inverse * DRAG_C;
+        vel.linvel += inverse * config.values.drag_c;
 
         // # drag from turning and moving forward
         let speed = vel.linvel.length();
         if 0.001 < speed {
             let normal = vel.linvel.normalize();
-            vel.linvel -= normal * DRAG_C * speed;
+            vel.linvel -= normal * config.values.drag_c * speed;
         }
 
         let speed = vel.angvel.length();
         if 0.001 < speed {
             let normal = vel.angvel.normalize();
-            vel.angvel -= normal * DRAG_ANG_C * speed
+            vel.angvel -= normal * config.values.drag_ang_c * speed
         }
     }
 }
