@@ -1,0 +1,15 @@
+*.glb filter=lfs diff=lfs merge=lfs -text
+*.png filter=lfs diff=lfs merge=lfs -text
+*.gltf filter=lfs diff=lfs merge=lfs -text
+assets filter=lfs diff=lfs merge=lfs -text
+assets/ref1.jpg filter=lfs diff=lfs merge=lfs -text
+assets/seilespill.blend1 filter=lfs diff=lfs merge=lfs -text
+assets/water-texture-diffuse.png filter=lfs diff=lfs merge=lfs -text
+assets/boat-texture-diffuse.png filter=lfs diff=lfs merge=lfs -text
+assets/island-1-texture-diffuse.png filter=lfs diff=lfs merge=lfs -text
+assets/person-1.xcf filter=lfs diff=lfs merge=lfs -text
+assets/seilespill.glb filter=lfs diff=lfs merge=lfs -text
+assets/seilespill.gltf filter=lfs diff=lfs merge=lfs -text
+assets/island-2-texture-diffuse.png filter=lfs diff=lfs merge=lfs -text
+assets/person-1.png filter=lfs diff=lfs merge=lfs -text
+assets/seilespill.blend filter=lfs diff=lfs merge=lfs -text

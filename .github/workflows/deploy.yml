@@ -1,0 +1,37 @@
+name: Build and Deploy to Github Pages
+on: 
+  push:
+    paths:
+     - 'src/**'
+     - 'Cargo.toml'
+     - 'build-web/**'
+     - 'index.html'
+     - 'assets/**'
+  workflow_dispatch:
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          lfs: true
+      - name: Running custom build script
+        run: echo 'y' | cargo build-web --release --rm-dev
+      - name: Setting up pages
+        uses: actions/configure-pages@v3
+      - name: Uploading files
+        uses: actions/upload-pages-artifact@v2
+        with:
+          path: '.'
+      - name: Deploying to Github Pages
+        uses: actions/deploy-pages@v2
