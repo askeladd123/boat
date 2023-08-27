@@ -17,6 +17,7 @@ mod utils;
 
 fn main() {
     App::new()
+        .add_systems(Update, (dock_menu_2).run_if(in_state(AssetState::Loaded)))
         .add_plugins(
             DefaultPlugins
                 .set(ImagePlugin::default_nearest())
@@ -33,6 +34,7 @@ fn main() {
         .add_state::<AssetState>()
         .add_event::<ConfigSave>()
         .add_event::<ConfigValuesChanged>()
+        .add_event::<Dock>()
         .add_systems(Startup, spawn_entities)
         .add_systems(PostStartup, (start_loading_assets, load_config))
         .add_systems(
@@ -51,13 +53,15 @@ fn main() {
                 move_camera,
                 add_env_forces,
                 update_values,
-                read_sensor_events,
-                dock_menu,
+                wire_sensor_events,
+                wire_dock_events,
             )
                 .run_if(in_state(AssetState::Loaded)),
         )
         .run();
 }
+
+//TODO: combine ConfigSave and ConfigValuesChanged into one enum to clean up
 
 /// fires when the config needs to save
 #[derive(Event)]
@@ -66,6 +70,12 @@ struct ConfigSave;
 /// fires when the config is changed
 #[derive(Event)]
 struct ConfigValuesChanged;
+
+#[derive(Event)]
+enum Dock {
+    Docking,
+    UnDocking,
+}
 
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Hash, States)]
 enum AssetState {
@@ -90,6 +100,11 @@ struct DockMenu;
 #[derive(Resource)]
 struct AssetsVital {
     bboxes: Handle<Gltf>,
+}
+
+#[derive(Resource)]
+struct AssetsNonvital {
+    font: Handle<Font>,
 }
 
 #[derive(Default, Debug)]
@@ -146,7 +161,129 @@ impl Default for ConfigValues {
     }
 }
 
-fn dock_menu(
+fn test_ui_move(
+    mut ui_query: Query<&mut Transform, (With<Node>, Without<Sensor>)>,
+    island_sensor_query: Query<&Transform, (With<Sensor>, Without<Node>)>,
+) {
+    let mut ui = ui_query.single_mut();
+    let trans = island_sensor_query.iter().next().unwrap();
+
+    *ui = *trans;
+}
+
+fn dock_menu_2(
+    mut cmd: Commands,
+    mut dock_reader: EventReader<Dock>,
+    mut dock_menu: Query<Entity, With<DockMenu>>,
+    assets: Res<AssetsNonvital>,
+) {
+    for event in dock_reader.iter() {
+        match event {
+            Dock::Docking => {
+                if dock_menu.is_empty() {
+                    cmd.spawn(DockMenu)
+                        .insert(NodeBundle {
+                            style: Style {
+                                width: Val::Percent(50.0),
+                                height: Val::Percent(25.0),
+                                position_type: PositionType::Absolute,
+                                left: Val::Percent(25.),
+                                top: Val::Percent(25.),
+                                justify_content: JustifyContent::SpaceEvenly,
+                                align_items: AlignItems::Center,
+                                ..default()
+                            },
+                            ..default()
+                        })
+                        .with_children(|cmd| {
+                            let text_style = TextStyle {
+                                font: assets.font.clone(),
+                                font_size: 18.,
+                                color: Color::BLACK,
+                            };
+                            let color_paper = Color::rgb(1., 0.85, 0.63).into();
+                            cmd.spawn(NodeBundle {
+                                style: Style {
+                                    width: Val::Percent(40.),
+                                    height: Val::Percent(80.),
+                                    justify_content: JustifyContent::FlexStart,
+                                    align_items: AlignItems::Stretch,
+                                    flex_direction: FlexDirection::Column,
+                                    padding: UiRect::percent(2., 2., 2., 2.),
+                                    margin: UiRect::percent(0.5, 0.5, 0.5, 0.5),
+                                    ..default()
+                                },
+                                background_color: color_paper,
+                                ..default()
+                            })
+                            .with_children(|cmd| {
+                                cmd.spawn(TextBundle::from_section("Bob Arne", text_style.clone()));
+                                cmd.spawn(TextBundle::from_section(
+                                    "Do you want to buy 5 bananas?",
+                                    text_style.clone(),
+                                ));
+                            });
+                            cmd.spawn(NodeBundle {
+                                style: Style {
+                                    width: Val::Percent(50.),
+                                    height: Val::Percent(100.),
+                                    justify_content: JustifyContent::FlexStart,
+                                    align_items: AlignItems::Stretch,
+                                    flex_direction: FlexDirection::Column,
+                                    padding: UiRect::percent(2., 2., 2., 2.),
+                                    margin: UiRect::percent(0.5, 0.5, 0.5, 0.5),
+                                    ..default()
+                                },
+                                background_color: color_paper,
+                                ..default()
+                            })
+                            .with_children(|cmd| {
+                                cmd.spawn(TextBundle::from_section(
+                                    "Kjell Tore",
+                                    text_style.clone(),
+                                ));
+                                cmd.spawn(TextBundle::from_section(
+                                    "Can you give me a ride to Porsgrunn?",
+                                    text_style.clone(),
+                                ));
+                            });
+                            cmd.spawn(NodeBundle {
+                                style: Style {
+                                    width: Val::Percent(40.),
+                                    height: Val::Percent(80.),
+                                    justify_content: JustifyContent::FlexStart,
+                                    align_items: AlignItems::Stretch,
+                                    flex_direction: FlexDirection::Column,
+                                    padding: UiRect::percent(2., 2., 2., 2.),
+                                    margin: UiRect::percent(0.5, 0.5, 0.5, 0.5),
+                                    ..default()
+                                },
+                                background_color: color_paper,
+                                ..default()
+                            })
+                            .with_children(|cmd| {
+                                cmd.spawn(TextBundle::from_section(
+                                    "Bjorn Fredrik",
+                                    text_style.clone(),
+                                ));
+                                cmd.spawn(TextBundle::from_section(
+                                    "I want to buy 3 fish.",
+                                    text_style.clone(),
+                                ));
+                            });
+                        });
+                }
+            }
+            Dock::UnDocking => {
+                if !dock_menu.is_empty() {
+                    cmd.entity(dock_menu.single()).despawn();
+                }
+            }
+        }
+    }
+}
+
+fn wire_dock_events(
     mut cmd: Commands,
     mut sensor_query: Query<(Entity, &Transform), With<Sensor>>,
     mut dock_menu_query: Query<
@@ -155,50 +292,38 @@ fn dock_menu(
     >,
     mut player_query: Query<&Velocity, With<Player>>,
     mut player_data: ResMut<PlayerData>,
+    mut dock_writer: EventWriter<Dock>,
 ) {
     const MAX_DOCK_VEL: f32 = 0.1;
     const MIN_UNDOCK_VEL: f32 = 0.5;
 
     let mut speed = length_xz(&player_query.single_mut().linvel);
-    let (mut menu_visibility, mut menu_transform) = dock_menu_query.single_mut();
-
     match player_data.dock_state {
-        DockState::TooFar => {
-            *menu_visibility = Visibility::Hidden;
-        }
+        DockState::TooFar => {}
         DockState::CloseTo(sensor) => {
             if speed < MAX_DOCK_VEL {
                 player_data.dock_state = DockState::DockedTo(sensor);
-
-                let mut transform = sensor_query
-                    .iter()
-                    .find_map(|(k, v)| if k == sensor { Some(v) } else { None })
-                    .unwrap()
-                    .clone();
-
-                *menu_visibility = Visibility::Visible;
-                *menu_transform = transform;
+                dock_writer.send(Dock::Docking);
             }
         }
         DockState::DockedTo(sensor) => {
             if MIN_UNDOCK_VEL < speed {
                 player_data.dock_state = DockState::CloseTo(sensor);
-
-                *menu_visibility = Visibility::Hidden;
+                dock_writer.send(Dock::UnDocking);
             }
         }
     }
 }
 
-fn read_sensor_events(
+fn wire_sensor_events(
     mut collision_events: EventReader<CollisionEvent>,
+    mut dock_write: EventWriter<Dock>,
     mut player_query: Query<Entity, With<Player>>,
     mut sensor_query: Query<Entity, With<Sensor>>,
     mut player_data: ResMut<PlayerData>,
 ) {
-    let mut player = player_query.single_mut();
-
     for event in collision_events.iter() {
+        let mut player = player_query.single_mut();
         match event {
             CollisionEvent::Started(entity1, entity2, ..) if *entity1 == player => {
                 for sensor in sensor_query.iter() {
@@ -260,7 +385,24 @@ fn spawn_entities(mut cmd: Commands) {
         saved: true,
         values: ConfigValues::default(),
     });
-    cmd.spawn(DockMenu);
+    // cmd.spawn((
+    //     DockMenu,
+    //     // NodeBundle {
+    //     //     style: Style {
+    //     //         width: Val::Percent(50.0),
+    //     //         height: Val::Percent(50.0),
+    //     //         position_type: PositionType::Absolute,
+    //     //         left: Val::Percent(25.),
+    //     //         top: Val::Percent(25.),
+    //     //         justify_content: JustifyContent::SpaceAround,
+    //     //         align_items: AlignItems::Center,
+    //     //         ..default()
+    //     //     },
+    //     //     visibility: Visibility::Hidden,
+    //     //     background_color: Color::ANTIQUE_WHITE.into(),
+    //     //     ..default()
+    //     // },
+    // ));
     cmd.insert_resource(PlayerData::default());
 }
 
@@ -280,11 +422,15 @@ fn start_loading_assets(
     asset_server: Res<AssetServer>,
     player: Query<Entity, With<Player>>,
     camera: Query<Entity, With<Camera>>,
-    dock_menu: Query<Entity, With<DockMenu>>,
+    // dock_menu: Query<Entity, With<DockMenu>>,
 ) {
     // these assets are vital, and the rest of the program need to wait for them
     cmd.insert_resource(AssetsVital {
         bboxes: asset_server.load("bboxes.glb"),
+    });
+
+    cmd.insert_resource(AssetsNonvital {
+        font: asset_server.load("skulls-and-crossbones.ttf"),
     });
 
     //TODO: this directional light is used before it's guaranteed loaded, but for some reason it doesn't cause a crash
@@ -311,11 +457,11 @@ fn start_loading_assets(
         scene: asset_server.load("ocean.glb#Scene0"),
         ..default()
     });
-    cmd.entity(dock_menu.single()).insert(SceneBundle {
-        scene: asset_server.load("persons.glb#Scene0"),
-        visibility: Visibility::Hidden,
-        ..default()
-    });
+    // cmd.entity(dock_menu.single()).insert(SceneBundle {
+    //     scene: asset_server.load("persons.glb#Scene0"),
+    //     visibility: Visibility::Hidden,
+    //     ..default()
+    // });
 }
 
 fn check_if_vital_assets_loaded(
