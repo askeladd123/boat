@@ -102,6 +102,11 @@ struct AssetsVital {
     bboxes: Handle<Gltf>,
 }
 
+#[derive(Resource)]
+struct AssetsNonvital {
+    font: Handle<Font>,
+}
+
 #[derive(Default, Debug)]
 enum DockState {
     #[default]
@@ -169,18 +174,110 @@ fn test_ui_move(
 fn dock_menu_2(
     mut cmd: Commands,
     mut dock_reader: EventReader<Dock>,
-    mut dock_menu: Query<(&mut Transform, &mut Visibility), With<DockMenu>>,
+    mut dock_menu: Query<Entity, With<DockMenu>>,
+    assets: Res<AssetsNonvital>,
 ) {
     for event in dock_reader.iter() {
-        let (menu_trans, mut menu_visibility) = dock_menu.single_mut();
         match event {
             Dock::Docking => {
-                debug!("docking");
-                *menu_visibility = Visibility::Visible;
+                if dock_menu.is_empty() {
+                    cmd.spawn(DockMenu)
+                        .insert(NodeBundle {
+                            style: Style {
+                                width: Val::Percent(50.0),
+                                height: Val::Percent(25.0),
+                                position_type: PositionType::Absolute,
+                                left: Val::Percent(25.),
+                                top: Val::Percent(25.),
+                                justify_content: JustifyContent::SpaceEvenly,
+                                align_items: AlignItems::Center,
+                                ..default()
+                            },
+                            ..default()
+                        })
+                        .with_children(|cmd| {
+                            let text_style = TextStyle {
+                                font: assets.font.clone(),
+                                font_size: 18.,
+                                color: Color::BLACK,
+                            };
+                            let color_paper = Color::rgb(1., 0.85, 0.63).into();
+                            cmd.spawn(NodeBundle {
+                                style: Style {
+                                    width: Val::Percent(40.),
+                                    height: Val::Percent(80.),
+                                    justify_content: JustifyContent::FlexStart,
+                                    align_items: AlignItems::Stretch,
+                                    flex_direction: FlexDirection::Column,
+                                    padding: UiRect::percent(2., 2., 2., 2.),
+                                    margin: UiRect::percent(0.5, 0.5, 0.5, 0.5),
+                                    ..default()
+                                },
+                                background_color: color_paper,
+                                ..default()
+                            })
+                            .with_children(|cmd| {
+                                cmd.spawn(TextBundle::from_section("Bob Arne", text_style.clone()));
+                                cmd.spawn(TextBundle::from_section(
+                                    "Do you want to buy 5 bananas?",
+                                    text_style.clone(),
+                                ));
+                            });
+                            cmd.spawn(NodeBundle {
+                                style: Style {
+                                    width: Val::Percent(50.),
+                                    height: Val::Percent(100.),
+                                    justify_content: JustifyContent::FlexStart,
+                                    align_items: AlignItems::Stretch,
+                                    flex_direction: FlexDirection::Column,
+                                    padding: UiRect::percent(2., 2., 2., 2.),
+                                    margin: UiRect::percent(0.5, 0.5, 0.5, 0.5),
+                                    ..default()
+                                },
+                                background_color: color_paper,
+                                ..default()
+                            })
+                            .with_children(|cmd| {
+                                cmd.spawn(TextBundle::from_section(
+                                    "Kjell Tore",
+                                    text_style.clone(),
+                                ));
+                                cmd.spawn(TextBundle::from_section(
+                                    "Can you give me a ride to Porsgrunn?",
+                                    text_style.clone(),
+                                ));
+                            });
+                            cmd.spawn(NodeBundle {
+                                style: Style {
+                                    width: Val::Percent(40.),
+                                    height: Val::Percent(80.),
+                                    justify_content: JustifyContent::FlexStart,
+                                    align_items: AlignItems::Stretch,
+                                    flex_direction: FlexDirection::Column,
+                                    padding: UiRect::percent(2., 2., 2., 2.),
+                                    margin: UiRect::percent(0.5, 0.5, 0.5, 0.5),
+                                    ..default()
+                                },
+                                background_color: color_paper,
+                                ..default()
+                            })
+                            .with_children(|cmd| {
+                                cmd.spawn(TextBundle::from_section(
+                                    "Bjorn Fredrik",
+                                    text_style.clone(),
+                                ));
+                                cmd.spawn(TextBundle::from_section(
+                                    "I want to buy 3 fish.",
+                                    text_style.clone(),
+                                ));
+                            });
+                        });
+                }
             }
             Dock::UnDocking => {
-                debug!("undocking");
-                *menu_visibility = Visibility::Hidden;
+                if !dock_menu.is_empty() {
+                    cmd.entity(dock_menu.single()).despawn();
+                }
             }
         }
     }
@@ -288,24 +385,24 @@ fn spawn_entities(mut cmd: Commands) {
         saved: true,
         values: ConfigValues::default(),
     });
-    cmd.spawn((
-        DockMenu,
-        NodeBundle {
-            style: Style {
-                width: Val::Percent(50.0),
-                height: Val::Percent(50.0),
-                position_type: PositionType::Absolute,
-                left: Val::Percent(25.),
-                top: Val::Percent(25.),
-                justify_content: JustifyContent::SpaceAround,
-                align_items: AlignItems::Center,
-                ..default()
-            },
-            visibility: Visibility::Hidden,
-            background_color: Color::ANTIQUE_WHITE.into(),
-            ..default()
-        },
-    ));
+    // cmd.spawn((
+    //     DockMenu,
+    //     // NodeBundle {
+    //     //     style: Style {
+    //     //         width: Val::Percent(50.0),
+    //     //         height: Val::Percent(50.0),
+    //     //         position_type: PositionType::Absolute,
+    //     //         left: Val::Percent(25.),
+    //     //         top: Val::Percent(25.),
+    //     //         justify_content: JustifyContent::SpaceAround,
+    //     //         align_items: AlignItems::Center,
+    //     //         ..default()
+    //     //     },
+    //     //     visibility: Visibility::Hidden,
+    //     //     background_color: Color::ANTIQUE_WHITE.into(),
+    //     //     ..default()
+    //     // },
+    // ));
     cmd.insert_resource(PlayerData::default());
 }
 
@@ -330,6 +427,10 @@ fn start_loading_assets(
     // these assets are vital, and the rest of the program need to wait for them
     cmd.insert_resource(AssetsVital {
         bboxes: asset_server.load("bboxes.glb"),
+    });
+
+    cmd.insert_resource(AssetsNonvital {
+        font: asset_server.load("skulls-and-crossbones.ttf"),
     });
 
     //TODO: this directional light is used before it's guaranteed loaded, but for some reason it doesn't cause a crash
