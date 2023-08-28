@@ -7,7 +7,7 @@ pub struct Card {
 }
 
 impl Card {
-    pub fn spawn_node(&self, cmd: &mut ChildBuilder, font: Handle<Font>) {
+    pub fn spawn_node(&self, selected: bool, cmd: &mut ChildBuilder, font: Handle<Font>) {
         let text_style = TextStyle {
             font,
             font_size: 18.,
@@ -16,8 +16,8 @@ impl Card {
         let color_paper = Color::rgb(1., 0.85, 0.63).into();
         cmd.spawn(NodeBundle {
             style: Style {
-                width: Val::Percent(40.),
-                height: Val::Percent(80.),
+                width: Val::Percent(if selected { 50. } else { 40. }),
+                height: Val::Percent(if selected { 100. } else { 80. }),
                 justify_content: JustifyContent::FlexStart,
                 align_items: AlignItems::Stretch,
                 flex_direction: FlexDirection::Column,
@@ -40,3 +40,6 @@ impl Card {
         });
     }
 }
+
+#[derive(Component)]
+struct Dock {}
