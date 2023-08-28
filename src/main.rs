@@ -8,13 +8,13 @@ use bevy::{
 };
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
 use bevy_rapier3d::prelude::*;
-use dock_menu::*;
+use dock::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 use utils::*;
 
-mod dock_menu;
+mod dock;
 mod utils;
 
 fn main() {
@@ -202,21 +202,29 @@ fn dock_menu_2(
                                 person_name: "Bob Arne".into(),
                                 task: "Do you want to buy 5 bananas?".into(),
                             }
-                            .spawn_node(cmd, assets.font.clone());
+                            .spawn_node(
+                                false,
+                                cmd,
+                                assets.font.clone(),
+                            );
                         })
                         .with_children(|cmd| {
                             Card {
                                 person_name: "Asbjørn Johann".into(),
                                 task: "Do you want to buy 5 bananas?".into(),
                             }
-                            .spawn_node(cmd, assets.font.clone());
+                            .spawn_node(true, cmd, assets.font.clone());
                         })
                         .with_children(|cmd| {
                             Card {
                                 person_name: "Bob Arne".into(),
                                 task: "Do you want to buy 5 bananas?".into(),
                             }
-                            .spawn_node(cmd, assets.font.clone());
+                            .spawn_node(
+                                false,
+                                cmd,
+                                assets.font.clone(),
+                            );
                         });
                 }
             }
