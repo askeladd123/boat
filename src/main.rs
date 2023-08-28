@@ -8,11 +8,13 @@ use bevy::{
 };
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
 use bevy_rapier3d::prelude::*;
+use dock_menu::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 use utils::*;
 
+mod dock_menu;
 mod utils;
 
 fn main() {
@@ -196,81 +198,25 @@ fn dock_menu_2(
                             ..default()
                         })
                         .with_children(|cmd| {
-                            let text_style = TextStyle {
-                                font: assets.font.clone(),
-                                font_size: 18.,
-                                color: Color::BLACK,
-                            };
-                            let color_paper = Color::rgb(1., 0.85, 0.63).into();
-                            cmd.spawn(NodeBundle {
-                                style: Style {
-                                    width: Val::Percent(40.),
-                                    height: Val::Percent(80.),
-                                    justify_content: JustifyContent::FlexStart,
-                                    align_items: AlignItems::Stretch,
-                                    flex_direction: FlexDirection::Column,
-                                    padding: UiRect::percent(2., 2., 2., 2.),
-                                    margin: UiRect::percent(0.5, 0.5, 0.5, 0.5),
-                                    ..default()
-                                },
-                                background_color: color_paper,
-                                ..default()
-                            })
-                            .with_children(|cmd| {
-                                cmd.spawn(TextBundle::from_section("Bob Arne", text_style.clone()));
-                                cmd.spawn(TextBundle::from_section(
-                                    "Do you want to buy 5 bananas?",
-                                    text_style.clone(),
-                                ));
-                            });
-                            cmd.spawn(NodeBundle {
-                                style: Style {
-                                    width: Val::Percent(50.),
-                                    height: Val::Percent(100.),
-                                    justify_content: JustifyContent::FlexStart,
-                                    align_items: AlignItems::Stretch,
-                                    flex_direction: FlexDirection::Column,
-                                    padding: UiRect::percent(2., 2., 2., 2.),
-                                    margin: UiRect::percent(0.5, 0.5, 0.5, 0.5),
-                                    ..default()
-                                },
-                                background_color: color_paper,
-                                ..default()
-                            })
-                            .with_children(|cmd| {
-                                cmd.spawn(TextBundle::from_section(
-                                    "Kjell Tore",
-                                    text_style.clone(),
-                                ));
-                                cmd.spawn(TextBundle::from_section(
-                                    "Can you give me a ride to Porsgrunn?",
-                                    text_style.clone(),
-                                ));
-                            });
-                            cmd.spawn(NodeBundle {
-                                style: Style {
-                                    width: Val::Percent(40.),
-                                    height: Val::Percent(80.),
-                                    justify_content: JustifyContent::FlexStart,
-                                    align_items: AlignItems::Stretch,
-                                    flex_direction: FlexDirection::Column,
-                                    padding: UiRect::percent(2., 2., 2., 2.),
-                                    margin: UiRect::percent(0.5, 0.5, 0.5, 0.5),
-                                    ..default()
-                                },
-                                background_color: color_paper,
-                                ..default()
-                            })
-                            .with_children(|cmd| {
-                                cmd.spawn(TextBundle::from_section(
-                                    "Bjorn Fredrik",
-                                    text_style.clone(),
-                                ));
-                                cmd.spawn(TextBundle::from_section(
-                                    "I want to buy 3 fish.",
-                                    text_style.clone(),
-                                ));
-                            });
+                            Card {
+                                person_name: "Bob Arne".into(),
+                                task: "Do you want to buy 5 bananas?".into(),
+                            }
+                            .spawn_node(cmd, assets.font.clone());
+                        })
+                        .with_children(|cmd| {
+                            Card {
+                                person_name: "Asbjørn Johann".into(),
+                                task: "Do you want to buy 5 bananas?".into(),
+                            }
+                            .spawn_node(cmd, assets.font.clone());
+                        })
+                        .with_children(|cmd| {
+                            Card {
+                                person_name: "Bob Arne".into(),
+                                task: "Do you want to buy 5 bananas?".into(),
+                            }
+                            .spawn_node(cmd, assets.font.clone());
                         });
                 }
             }
