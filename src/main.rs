@@ -8,26 +8,29 @@ use bevy::{
 };
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
 use bevy_rapier3d::prelude::*;
+use custom_assets::*;
 use dock::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::HashMap;
+use std::{collections::HashMap, iter::once};
 use utils::*;
 
+mod custom_assets;
 mod dock;
 mod utils;
 
 fn main() {
     App::new()
         .add_systems(Update, (dock_menu_2).run_if(in_state(AssetState::Loaded)))
-        .add_plugins(
+        .add_plugins((
             DefaultPlugins
                 .set(ImagePlugin::default_nearest())
                 .set(LogPlugin {
-                    filter: "warn,seilespill=trace".into(),
+                    filter: "warn,wgpu_hal::vulkan::instance=off,seilespill=trace".into(),
                     ..default()
                 }),
-        )
+            JsonAssetPlugin::<ConfigValues>::new(&["json"]),
+        ))
         .add_plugins((
             RapierPhysicsPlugin::<NoUserData>::default(),
             RapierDebugRenderPlugin::default().disabled(),
@@ -38,10 +41,17 @@ fn main() {
         .add_event::<ConfigValuesChanged>()
         .add_event::<Dock>()
         .add_systems(Startup, spawn_entities)
-        .add_systems(PostStartup, (start_loading_assets, load_config))
+        .add_systems(
+            PostStartup,
+            (
+                start_loading_assets,
+                // check_load_state,
+                // load_config
+            ),
+        )
         .add_systems(
             Update,
-            check_if_vital_assets_loaded.run_if(in_state(AssetState::Loading)),
+            (check_load_state, check_if_vital_assets_loaded).run_if(in_state(AssetState::Loading)),
         )
         .add_systems(Update, (update_ui, save_config))
         .add_systems(
@@ -100,6 +110,13 @@ struct Camera;
 struct DockMenu;
 
 #[derive(Resource)]
+struct AssetPool {
+    bboxes: Handle<Gltf>,
+    font: Handle<Font>,
+    config: Handle<ConfigValues>,
+}
+
+#[derive(Resource)]
 struct AssetsVital {
     bboxes: Handle<Gltf>,
 }
@@ -136,7 +153,10 @@ struct Config {
     values: ConfigValues,
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+const CONFIG_NAME: &str = "config.json";
+
+#[derive(Serialize, Deserialize, Clone, Copy, bevy::reflect::TypeUuid, bevy::reflect::TypePath)]
+#[uuid = "413be529-bfeb-41b3-9db0-4b8b380a2c46"]
 struct ConfigValues {
     drag_c: f32,
     avg_boat_height: f32,
@@ -360,16 +380,16 @@ fn spawn_entities(mut cmd: Commands) {
     cmd.insert_resource(PlayerData::default());
 }
 
-fn load_config(mut config: ResMut<Config>) {
-    match std::fs::read_to_string("config.json") {
-        Ok(str) => match serde_json::from_str(&str) {
-            Ok(v) => config.values = v,
+// fn load_config(mut config: ResMut<Config>) {
+//     match std::fs::read_to_string("config.json") {
+//         Ok(str) => match serde_json::from_str(&str) {
+//             Ok(v) => config.values = v,
 
-            Err(e) => error!("failed to parse json file; {e}"),
-        },
-        Err(e) => error!("failed to read config file: {e}"),
-    }
-}
+//             Err(e) => error!("failed to parse json file; {e}"),
+//         },
+//         Err(e) => error!("failed to read config file: {e}"),
+//     }
+// }
 
 fn start_loading_assets(
     mut cmd: Commands,
@@ -379,6 +399,13 @@ fn start_loading_assets(
     // dock_menu: Query<Entity, With<DockMenu>>,
 ) {
     // these assets are vital, and the rest of the program need to wait for them
+
+    cmd.insert_resource(AssetPool {
+        bboxes: asset_server.load("bboxes.glb"),
+        font: asset_server.load("skulls-and-crossbones.ttf"),
+        config: asset_server.load(CONFIG_NAME),
+    });
+
     cmd.insert_resource(AssetsVital {
         bboxes: asset_server.load("bboxes.glb"),
     });
@@ -418,6 +445,36 @@ fn start_loading_assets(
     // });
 }
 
+fn check_load_state(
+    asset_server: Res<AssetServer>,
+    asset_pool: Res<AssetPool>,
+    mut next_state: ResMut<NextState<AssetState>>,
+) {
+    use bevy::asset::LoadState::*;
+
+    let config_load_state = asset_server.get_load_state(asset_pool.config.id());
+    match config_load_state {
+        Failed => warn!("config file failed to load"),
+        _ => {}
+    }
+    let load_states = [
+        asset_server.get_load_state(asset_pool.bboxes.id()),
+        asset_server.get_load_state(asset_pool.font.id()),
+    ];
+
+    if load_states.contains(&Failed) {
+        error!("an asset failed to load");
+    }
+
+    if load_states
+        .iter()
+        .chain(once(&config_load_state))
+        .all(|v| matches!(v, Loaded) | matches!(v, Failed))
+    {
+        next_state.set(AssetState::Loaded);
+    }
+}
+
 fn check_if_vital_assets_loaded(
     asset_server: Res<AssetServer>,
     handles: Res<AssetsVital>,
@@ -433,7 +490,18 @@ fn check_if_vital_assets_loaded(
 fn on_loaded_general(
     mut light: Query<&mut DirectionalLight>,
     mut writer: EventWriter<ConfigValuesChanged>,
+    mut config: ResMut<Config>,
+    config_asset: Res<Assets<ConfigValues>>,
+    asset_pool: Res<AssetPool>,
 ) {
+    match config_asset.get(&asset_pool.config) {
+        None => {
+            warn!("config not loaded");
+        }
+        Some(v) => {
+            config.values = *v;
+        }
+    }
     // make use the config values are used once loaded
     writer.send(ConfigValuesChanged);
 
@@ -635,7 +703,10 @@ fn update_ui(
 fn save_config(mut config: ResMut<Config>, mut events: EventReader<ConfigSave>) {
     //TODO: check if writing json works on web
     for _ in events.iter() {
-        match std::fs::write("config.json", json!(config.values).to_string()) {
+        match std::fs::write(
+            "assets/".to_owned() + CONFIG_NAME,
+            json!(config.values).to_string(),
+        ) {
             Ok(_) => config.saved = true,
             Err(e) => error!("could not save config file: {e}"),
         }

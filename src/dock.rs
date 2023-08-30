@@ -42,4 +42,6 @@ impl Card {
 }
 
 #[derive(Component)]
-struct Dock {}
+struct Dock {
+    cards: Vec<Card>,
+}
