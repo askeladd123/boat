@@ -58,7 +58,7 @@ fn main() {
                 update_values,
                 wire_sensor_events,
                 wire_dock_events,
-                dock_menu_2,
+                dock_menu,
             )
                 .run_if(in_state(AssetState::Loaded)),
         )
@@ -175,7 +175,7 @@ impl Default for ConfigValues {
     }
 }
 
-fn dock_menu_2(
+fn dock_menu(
     mut cmd: Commands,
     mut dock_reader: EventReader<Dock>,
     mut dock_menu: Query<Entity, With<DockMenu>>,
