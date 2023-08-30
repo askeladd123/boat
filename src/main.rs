@@ -36,7 +36,7 @@ fn main() {
         .add_state::<AssetState>()
         .add_event::<ConfigSave>()
         .add_event::<ConfigValuesChanged>()
-        .add_event::<Dock>()
+        .add_event::<DockEvent>()
         .add_systems(Startup, spawn_entities)
         .add_systems(PostStartup, start_loading_assets)
         .add_systems(
@@ -46,7 +46,7 @@ fn main() {
         .add_systems(Update, update_ui)
         .add_systems(
             OnEnter(AssetState::Loaded),
-            (on_loaded_general, add_vital_assets),
+            (on_loaded_general, on_loaded_add_assets),
         )
         .add_systems(
             Update,
@@ -58,7 +58,7 @@ fn main() {
                 update_values,
                 wire_sensor_events,
                 wire_dock_events,
-                dock_menu_2,
+                dock_menu,
             )
                 .run_if(in_state(AssetState::Loaded)),
         )
@@ -76,7 +76,7 @@ struct ConfigSave;
 struct ConfigValuesChanged;
 
 #[derive(Event)]
-enum Dock {
+enum DockEvent {
     Docking,
     UnDocking,
 }
@@ -88,6 +88,9 @@ enum AssetState {
     Loaded,
     Failed,
 }
+
+#[derive(Component)]
+struct Dock;
 
 #[derive(Component)]
 struct Player;
@@ -175,15 +178,15 @@ impl Default for ConfigValues {
     }
 }
 
-fn dock_menu_2(
+fn dock_menu(
     mut cmd: Commands,
-    mut dock_reader: EventReader<Dock>,
+    mut dock_reader: EventReader<DockEvent>,
     mut dock_menu: Query<Entity, With<DockMenu>>,
     assets: Res<AssetsNonvital>,
 ) {
     for event in dock_reader.iter() {
         match event {
-            Dock::Docking => {
+            DockEvent::Docking => {
                 if dock_menu.is_empty() {
                     cmd.spawn(DockMenu)
                         .insert(NodeBundle {
@@ -230,7 +233,7 @@ fn dock_menu_2(
                         });
                 }
             }
-            Dock::UnDocking => {
+            DockEvent::UnDocking => {
                 if !dock_menu.is_empty() {
                     cmd.entity(dock_menu.single()).despawn();
                 }
@@ -241,14 +244,11 @@ fn dock_menu_2(
 
 fn wire_dock_events(
     mut cmd: Commands,
-    mut sensor_query: Query<(Entity, &Transform), With<Sensor>>,
-    mut dock_menu_query: Query<
-        (&mut Visibility, &mut Transform),
-        (With<DockMenu>, Without<Sensor>),
-    >,
+    mut dock_query: Query<(Entity, &Transform), With<Dock>>,
+    mut dock_menu_query: Query<(&mut Visibility, &mut Transform), (With<DockMenu>, Without<Dock>)>,
     mut player_query: Query<&Velocity, With<Player>>,
     mut player_data: ResMut<PlayerData>,
-    mut dock_writer: EventWriter<Dock>,
+    mut dock_writer: EventWriter<DockEvent>,
 ) {
     const MAX_DOCK_VEL: f32 = 0.1;
     const MIN_UNDOCK_VEL: f32 = 0.5;
@@ -256,16 +256,16 @@ fn wire_dock_events(
     let speed = length_xz(&player_query.single_mut().linvel);
     match player_data.dock_state {
         DockState::TooFar => {}
-        DockState::CloseTo(sensor) => {
+        DockState::CloseTo(dock) => {
             if speed < MAX_DOCK_VEL {
-                player_data.dock_state = DockState::DockedTo(sensor);
-                dock_writer.send(Dock::Docking);
+                player_data.dock_state = DockState::DockedTo(dock);
+                dock_writer.send(DockEvent::Docking);
             }
         }
-        DockState::DockedTo(sensor) => {
+        DockState::DockedTo(dock) => {
             if MIN_UNDOCK_VEL < speed {
-                player_data.dock_state = DockState::CloseTo(sensor);
-                dock_writer.send(Dock::UnDocking);
+                player_data.dock_state = DockState::CloseTo(dock);
+                dock_writer.send(DockEvent::UnDocking);
             }
         }
     }
@@ -273,24 +273,24 @@ fn wire_dock_events(
 
 fn wire_sensor_events(
     mut collision_events: EventReader<CollisionEvent>,
-    mut dock_write: EventWriter<Dock>,
+    mut dock_write: EventWriter<DockEvent>,
     mut player_query: Query<Entity, With<Player>>,
-    mut sensor_query: Query<Entity, With<Sensor>>,
+    mut dock_query: Query<Entity, (With<Sensor>, With<Dock>)>,
     mut player_data: ResMut<PlayerData>,
 ) {
     for event in collision_events.iter() {
         let player = player_query.single_mut();
         match event {
             CollisionEvent::Started(entity1, entity2, ..) if *entity1 == player => {
-                for sensor in sensor_query.iter() {
-                    if sensor == *entity2 {
-                        player_data.dock_state = DockState::CloseTo(sensor.clone());
+                for dock in dock_query.iter() {
+                    if dock == *entity2 {
+                        player_data.dock_state = DockState::CloseTo(dock.clone());
                     }
                 }
             }
             CollisionEvent::Stopped(entity1, entity2, ..) if *entity1 == player => {
-                for sensor in sensor_query.iter() {
-                    if sensor == *entity2 {
+                for dock in dock_query.iter() {
+                    if dock == *entity2 {
                         player_data.dock_state = DockState::TooFar;
                     }
                 }
@@ -332,6 +332,8 @@ fn spawn_entities(mut cmd: Commands) {
         ActiveEvents::COLLISION_EVENTS,
     ));
     cmd.spawn(Camera);
+    cmd.spawn(Dock);
+    cmd.spawn(Dock);
     cmd.insert_resource(AmbientLight {
         color: Color::rgb(0.5, 0.5, 0.8),
         brightness: 1.0,
@@ -444,7 +446,7 @@ fn on_loaded_general(
     light.shadows_enabled = true;
 }
 
-fn add_vital_assets(
+fn on_loaded_add_assets(
     mut cmd: Commands,
     handles: Res<AssetsVital>,
     assets_gltf: Res<Assets<Gltf>>,
@@ -452,6 +454,7 @@ fn add_vital_assets(
     assets_gltf_mesh: Res<Assets<GltfMesh>>,
     assets_mesh: Res<Assets<Mesh>>,
     player: Query<Entity, With<Player>>,
+    docks_query: Query<Entity, With<Dock>>,
 ) {
     // convert colliders
     let gltf = assets_gltf.get(&handles.bboxes).unwrap();
@@ -508,8 +511,10 @@ fn add_vital_assets(
 
     let island1 = colliders_cylinder["island-1"].clone();
     let island2 = colliders_cylinder["island-2"].clone();
-    cmd.spawn((Sensor, island1.0, island1.1)); //, ActiveEvents::COLLISION_EVENTS));
-    cmd.spawn((Sensor, island2.0, island2.1));
+    let docks = docks_query.iter().collect::<Vec<_>>();
+    assert!(docks.len() == 2, "not enough docks");
+    cmd.entity(docks[0]).insert((Sensor, island1.0, island1.1)); //, ActiveEvents::COLLISION_EVENTS));
+    cmd.entity(docks[1]).insert((Sensor, island2.0, island2.1));
 
     cmd.remove_resource::<AssetsVital>();
 }
