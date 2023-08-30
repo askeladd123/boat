@@ -8,42 +8,42 @@ use bevy::{
 };
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
 use bevy_rapier3d::prelude::*;
+use custom_assets::*;
 use dock::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::HashMap;
+use std::{collections::HashMap, iter::once};
 use utils::*;
 
+mod custom_assets;
 mod dock;
 mod utils;
 
 fn main() {
     App::new()
-        .add_systems(Update, (dock_menu_2).run_if(in_state(AssetState::Loaded)))
-        .add_plugins(
+        .add_plugins((
             DefaultPlugins
                 .set(ImagePlugin::default_nearest())
                 .set(LogPlugin {
-                    filter: "warn,seilespill=trace".into(),
+                    filter: "warn,wgpu_hal::vulkan::instance=off,seilespill=trace".into(),
                     ..default()
                 }),
-        )
-        .add_plugins((
+            JsonAssetPlugin::<ConfigValues>::new(&["json"]),
             RapierPhysicsPlugin::<NoUserData>::default(),
             RapierDebugRenderPlugin::default().disabled(),
+            EguiPlugin,
         ))
-        .add_plugins(EguiPlugin)
         .add_state::<AssetState>()
         .add_event::<ConfigSave>()
         .add_event::<ConfigValuesChanged>()
         .add_event::<Dock>()
         .add_systems(Startup, spawn_entities)
-        .add_systems(PostStartup, (start_loading_assets, load_config))
+        .add_systems(PostStartup, start_loading_assets)
         .add_systems(
             Update,
-            check_if_vital_assets_loaded.run_if(in_state(AssetState::Loading)),
+            (check_load_state).run_if(in_state(AssetState::Loading)),
         )
-        .add_systems(Update, (update_ui, save_config))
+        .add_systems(Update, update_ui)
         .add_systems(
             OnEnter(AssetState::Loaded),
             (on_loaded_general, add_vital_assets),
@@ -52,11 +52,13 @@ fn main() {
             Update,
             (
                 keyboard_input_system,
+                save_config,
                 move_camera,
                 add_env_forces,
                 update_values,
                 wire_sensor_events,
                 wire_dock_events,
+                dock_menu_2,
             )
                 .run_if(in_state(AssetState::Loaded)),
         )
@@ -100,6 +102,13 @@ struct Camera;
 struct DockMenu;
 
 #[derive(Resource)]
+struct AssetPool {
+    bboxes: Handle<Gltf>,
+    font: Handle<Font>,
+    config: Handle<ConfigValues>,
+}
+
+#[derive(Resource)]
 struct AssetsVital {
     bboxes: Handle<Gltf>,
 }
@@ -136,7 +145,10 @@ struct Config {
     values: ConfigValues,
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+const CONFIG_NAME: &str = "config.json";
+
+#[derive(Serialize, Deserialize, Clone, Copy, bevy::reflect::TypeUuid, bevy::reflect::TypePath)]
+#[uuid = "413be529-bfeb-41b3-9db0-4b8b380a2c46"]
 struct ConfigValues {
     drag_c: f32,
     avg_boat_height: f32,
@@ -161,16 +173,6 @@ impl Default for ConfigValues {
             light_amb_lum: 1.,
         }
     }
-}
-
-fn test_ui_move(
-    mut ui_query: Query<&mut Transform, (With<Node>, Without<Sensor>)>,
-    island_sensor_query: Query<&Transform, (With<Sensor>, Without<Node>)>,
-) {
-    let mut ui = ui_query.single_mut();
-    let trans = island_sensor_query.iter().next().unwrap();
-
-    *ui = *trans;
 }
 
 fn dock_menu_2(
@@ -251,7 +253,7 @@ fn wire_dock_events(
     const MAX_DOCK_VEL: f32 = 0.1;
     const MIN_UNDOCK_VEL: f32 = 0.5;
 
-    let mut speed = length_xz(&player_query.single_mut().linvel);
+    let speed = length_xz(&player_query.single_mut().linvel);
     match player_data.dock_state {
         DockState::TooFar => {}
         DockState::CloseTo(sensor) => {
@@ -277,7 +279,7 @@ fn wire_sensor_events(
     mut player_data: ResMut<PlayerData>,
 ) {
     for event in collision_events.iter() {
-        let mut player = player_query.single_mut();
+        let player = player_query.single_mut();
         match event {
             CollisionEvent::Started(entity1, entity2, ..) if *entity1 == player => {
                 for sensor in sensor_query.iter() {
@@ -339,36 +341,7 @@ fn spawn_entities(mut cmd: Commands) {
         saved: true,
         values: ConfigValues::default(),
     });
-    // cmd.spawn((
-    //     DockMenu,
-    //     // NodeBundle {
-    //     //     style: Style {
-    //     //         width: Val::Percent(50.0),
-    //     //         height: Val::Percent(50.0),
-    //     //         position_type: PositionType::Absolute,
-    //     //         left: Val::Percent(25.),
-    //     //         top: Val::Percent(25.),
-    //     //         justify_content: JustifyContent::SpaceAround,
-    //     //         align_items: AlignItems::Center,
-    //     //         ..default()
-    //     //     },
-    //     //     visibility: Visibility::Hidden,
-    //     //     background_color: Color::ANTIQUE_WHITE.into(),
-    //     //     ..default()
-    //     // },
-    // ));
     cmd.insert_resource(PlayerData::default());
-}
-
-fn load_config(mut config: ResMut<Config>) {
-    match std::fs::read_to_string("config.json") {
-        Ok(str) => match serde_json::from_str(&str) {
-            Ok(v) => config.values = v,
-
-            Err(e) => error!("failed to parse json file; {e}"),
-        },
-        Err(e) => error!("failed to read config file: {e}"),
-    }
 }
 
 fn start_loading_assets(
@@ -376,9 +349,15 @@ fn start_loading_assets(
     asset_server: Res<AssetServer>,
     player: Query<Entity, With<Player>>,
     camera: Query<Entity, With<Camera>>,
-    // dock_menu: Query<Entity, With<DockMenu>>,
 ) {
     // these assets are vital, and the rest of the program need to wait for them
+
+    cmd.insert_resource(AssetPool {
+        bboxes: asset_server.load("bboxes.glb"),
+        font: asset_server.load("skulls-and-crossbones.ttf"),
+        config: asset_server.load(CONFIG_NAME),
+    });
+
     cmd.insert_resource(AssetsVital {
         bboxes: asset_server.load("bboxes.glb"),
     });
@@ -411,29 +390,53 @@ fn start_loading_assets(
         scene: asset_server.load("ocean.glb#Scene0"),
         ..default()
     });
-    // cmd.entity(dock_menu.single()).insert(SceneBundle {
-    //     scene: asset_server.load("persons.glb#Scene0"),
-    //     visibility: Visibility::Hidden,
-    //     ..default()
-    // });
 }
 
-fn check_if_vital_assets_loaded(
+fn check_load_state(
     asset_server: Res<AssetServer>,
-    handles: Res<AssetsVital>,
+    asset_pool: Res<AssetPool>,
     mut next_state: ResMut<NextState<AssetState>>,
 ) {
-    match asset_server.get_group_load_state([handles.bboxes.id()]) {
-        bevy::asset::LoadState::Loaded => next_state.set(AssetState::Loaded),
-        bevy::asset::LoadState::Failed => next_state.set(AssetState::Failed),
+    use bevy::asset::LoadState::*;
+
+    let config_load_state = asset_server.get_load_state(asset_pool.config.id());
+    match config_load_state {
+        Failed => warn!("config file failed to load"),
         _ => {}
+    }
+    let load_states = [
+        asset_server.get_load_state(asset_pool.bboxes.id()),
+        asset_server.get_load_state(asset_pool.font.id()),
+    ];
+
+    if load_states.contains(&Failed) {
+        error!("an asset failed to load");
+    }
+
+    if load_states
+        .iter()
+        .chain(once(&config_load_state))
+        .all(|v| matches!(v, Loaded) | matches!(v, Failed))
+    {
+        next_state.set(AssetState::Loaded);
     }
 }
 
 fn on_loaded_general(
     mut light: Query<&mut DirectionalLight>,
     mut writer: EventWriter<ConfigValuesChanged>,
+    mut config: ResMut<Config>,
+    config_asset: Res<Assets<ConfigValues>>,
+    asset_pool: Res<AssetPool>,
 ) {
+    match config_asset.get(&asset_pool.config) {
+        None => {
+            warn!("config not loaded");
+        }
+        Some(v) => {
+            config.values = *v;
+        }
+    }
     // make use the config values are used once loaded
     writer.send(ConfigValuesChanged);
 
@@ -453,7 +456,7 @@ fn add_vital_assets(
     // convert colliders
     let gltf = assets_gltf.get(&handles.bboxes).unwrap();
 
-    let mut colliders_trimesh = gltf
+    let colliders_trimesh = gltf
         .named_nodes
         .iter()
         .filter_map(|(k, v)| match k.strip_suffix("-trimesh") {
@@ -478,7 +481,7 @@ fn add_vital_assets(
         })
         .collect::<HashMap<String, (TransformBundle, Collider)>>();
 
-    let mut colliders_cylinder = gltf
+    let colliders_cylinder = gltf
         .named_nodes
         .iter()
         .filter_map(|(k, v)| match k.strip_suffix("-cylinder") {
@@ -523,7 +526,7 @@ fn update_ui(
 ) {
     use egui::*;
     //TODO: add a reload config button
-    egui::Window::new("debug control panel").show(contexts.ctx_mut(), |ui| {
+    Window::new("debug control panel").show(contexts.ctx_mut(), |ui| {
         let player_speed_xz = length_xz(&player_query.single().linvel);
 
         match state.get() {
@@ -540,19 +543,16 @@ fn update_ui(
 
         ui.collapsing("physics", |ui| {
             if ui
-                .add(egui::Slider::new(&mut config.values.drag_c, 0.0..=0.3).text("drag c"))
+                .add(Slider::new(&mut config.values.drag_c, 0.0..=0.3).text("drag c"))
                 .changed()
+                | ui.add(Slider::new(&mut config.values.floating_c, 0.0..=5.).text("floating c"))
+                    .changed()
                 | ui.add(
-                    egui::Slider::new(&mut config.values.floating_c, 0.0..=5.).text("floating c"),
+                    Slider::new(&mut config.values.drag_ang_c, 0.0..=0.3).text("angular drag c"),
                 )
                 .changed()
                 | ui.add(
-                    egui::Slider::new(&mut config.values.drag_ang_c, 0.0..=0.3)
-                        .text("angular drag c"),
-                )
-                .changed()
-                | ui.add(
-                    egui::Slider::new(&mut config.values.avg_boat_height, 0.0..=5.)
+                    Slider::new(&mut config.values.avg_boat_height, 0.0..=5.)
                         .text("average boat height"),
                 )
                 .changed()
@@ -564,16 +564,16 @@ fn update_ui(
 
             ui.label(format!("docking state: {:?}", player_data.dock_state));
             ui.label(format!("player speed: {:.2}", player_speed_xz,));
-        }); // diractional light
+        });
         ui.collapsing("graphics", |ui| {
             if ui
                 .add(
-                    egui::Slider::new(&mut config.values.light_dir_lum, 0.0..=100_000.)
+                    Slider::new(&mut config.values.light_dir_lum, 0.0..=100_000.)
                         .text("directional light illuminance"),
                 )
                 .changed()
                 | ui.add(
-                    egui::Slider::new(&mut config.values.light_amb_lum, 0.0..=3.)
+                    Slider::new(&mut config.values.light_amb_lum, 0.0..=3.)
                         .text("ambient light illuminance"),
                 )
                 .changed()
@@ -581,7 +581,6 @@ fn update_ui(
                 changed = true;
             }
 
-            // directional light
             ui.horizontal(|ui| {
                 let mut buf = [
                     config.values.light_dir_color.r(),
@@ -595,7 +594,6 @@ fn update_ui(
                 ui.label("directional light color")
             });
 
-            // ambient light
             ui.horizontal(|ui| {
                 let mut buf = [
                     config.values.light_amb_color.r(),
@@ -620,9 +618,9 @@ fn update_ui(
             .add_enabled(
                 !config.saved,
                 if config.saved {
-                    egui::Button::new("config saved")
+                    Button::new("config saved")
                 } else {
-                    egui::Button::new("save config")
+                    Button::new("save config")
                 },
             )
             .clicked()
@@ -635,7 +633,10 @@ fn update_ui(
 fn save_config(mut config: ResMut<Config>, mut events: EventReader<ConfigSave>) {
     //TODO: check if writing json works on web
     for _ in events.iter() {
-        match std::fs::write("config.json", json!(config.values).to_string()) {
+        match std::fs::write(
+            "assets/".to_owned() + CONFIG_NAME,
+            json!(config.values).to_string(),
+        ) {
             Ok(_) => config.saved = true,
             Err(e) => error!("could not save config file: {e}"),
         }
