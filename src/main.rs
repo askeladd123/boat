@@ -39,11 +39,11 @@ fn main() {
         .add_event::<Dock>()
         .add_systems(Startup, spawn_entities)
         .add_systems(PostStartup, start_loading_assets)
+        .add_systems(Update, update_ui)
         .add_systems(
             Update,
             (check_load_state).run_if(in_state(AssetState::Loading)),
         )
-        .add_systems(Update, update_ui)
         .add_systems(
             OnEnter(AssetState::Loaded),
             (on_loaded_general, add_vital_assets),
@@ -284,6 +284,7 @@ fn wire_sensor_events(
             CollisionEvent::Started(entity1, entity2, ..) if *entity1 == player => {
                 for sensor in sensor_query.iter() {
                     if sensor == *entity2 {
+                        debug!("entered");
                         player_data.dock_state = DockState::CloseTo(sensor.clone());
                     }
                 }
@@ -291,6 +292,7 @@ fn wire_sensor_events(
             CollisionEvent::Stopped(entity1, entity2, ..) if *entity1 == player => {
                 for sensor in sensor_query.iter() {
                     if sensor == *entity2 {
+                        debug!("left");
                         player_data.dock_state = DockState::TooFar;
                     }
                 }
@@ -396,6 +398,7 @@ fn check_load_state(
     asset_server: Res<AssetServer>,
     asset_pool: Res<AssetPool>,
     mut next_state: ResMut<NextState<AssetState>>,
+    light_query: Query<&DirectionalLight>,
 ) {
     use bevy::asset::LoadState::*;
 
@@ -417,6 +420,7 @@ fn check_load_state(
         .iter()
         .chain(once(&config_load_state))
         .all(|v| matches!(v, Loaded) | matches!(v, Failed))
+        && !light_query.is_empty()
     {
         next_state.set(AssetState::Loaded);
     }
