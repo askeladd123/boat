@@ -1,5 +1,5 @@
 #![allow(unused)]
-
+use bevy::reflect::TypePath;
 use bevy::{
     gltf::{Gltf, GltfMesh, GltfNode},
     log::LogPlugin,
@@ -150,8 +150,7 @@ struct Config {
 
 const CONFIG_NAME: &str = "config.json";
 
-#[derive(Serialize, Deserialize, Clone, Copy, bevy::reflect::TypeUuid, bevy::reflect::TypePath)]
-#[uuid = "413be529-bfeb-41b3-9db0-4b8b380a2c46"]
+#[derive(Serialize, Deserialize, Clone, Copy, Asset, TypePath)]
 struct ConfigValues {
     drag_c: f32,
     avg_boat_height: f32,
@@ -184,7 +183,7 @@ fn dock_menu(
     mut dock_menu: Query<Entity, With<DockMenu>>,
     assets: Res<AssetsNonvital>,
 ) {
-    for event in dock_reader.iter() {
+    for event in dock_reader.read() {
         match event {
             DockEvent::Docking => {
                 if dock_menu.is_empty() {
@@ -278,7 +277,7 @@ fn wire_sensor_events(
     mut dock_query: Query<Entity, (With<Sensor>, With<Dock>)>,
     mut player_data: ResMut<PlayerData>,
 ) {
-    for event in collision_events.iter() {
+    for event in collision_events.read() {
         let player = player_query.single_mut();
         match event {
             CollisionEvent::Started(entity1, entity2, ..) if *entity1 == player => {
@@ -306,7 +305,7 @@ fn update_values(
     mut light_amb: ResMut<AmbientLight>,
     mut light_dir: Query<&mut DirectionalLight>,
 ) {
-    for _ in events.iter() {
+    for _ in events.read() {
         let mut light_dir = light_dir.single_mut();
         light_amb.color = config.values.light_amb_color;
         light_amb.brightness = config.values.light_amb_lum;
@@ -401,14 +400,14 @@ fn check_load_state(
 ) {
     use bevy::asset::LoadState::*;
 
-    let config_load_state = asset_server.get_load_state(asset_pool.config.id());
+    let config_load_state = asset_server.get_load_state(asset_pool.config.id()).unwrap();
     match config_load_state {
         Failed => warn!("config file failed to load"),
         _ => {}
     }
     let load_states = [
-        asset_server.get_load_state(asset_pool.bboxes.id()),
-        asset_server.get_load_state(asset_pool.font.id()),
+        asset_server.get_load_state(asset_pool.bboxes.id()).unwrap(),
+        asset_server.get_load_state(asset_pool.font.id()).unwrap(),
     ];
 
     if load_states.contains(&Failed) {
@@ -465,13 +464,13 @@ fn on_loaded_add_assets(
         .filter_map(|(k, v)| match k.strip_suffix("-trimesh") {
             None => None,
             Some(stripped) => {
-                let node = assets_gltf_nodes.get(&v).unwrap();
+                let node = assets_gltf_nodes.get(v).unwrap();
 
                 let transform = TransformBundle::from(node.transform);
                 let mesh = assets_mesh
                     .get(
                         &assets_gltf_mesh
-                            .get(&node.mesh.as_ref().unwrap())
+                            .get(node.mesh.as_ref().unwrap())
                             .unwrap()
                             .primitives[0]
                             .mesh,
@@ -490,7 +489,7 @@ fn on_loaded_add_assets(
         .filter_map(|(k, v)| match k.strip_suffix("-cylinder") {
             None => None,
             Some(stripped) => {
-                let node = assets_gltf_nodes.get(&v).unwrap();
+                let node = assets_gltf_nodes.get(v).unwrap();
 
                 let transform = TransformBundle::from(node.transform);
 
@@ -637,7 +636,7 @@ fn update_ui(
 
 fn save_config(mut config: ResMut<Config>, mut events: EventReader<ConfigSave>) {
     //TODO: check if writing json works on web
-    for _ in events.iter() {
+    for _ in events.read() {
         match std::fs::write(
             "assets/".to_owned() + CONFIG_NAME,
             json!(config.values).to_string(),

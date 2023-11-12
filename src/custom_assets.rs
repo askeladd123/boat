@@ -1,6 +1,9 @@
 use bevy::app::{App, Plugin};
-use bevy::asset::{AddAsset, Asset, AssetLoader, BoxedFuture, LoadContext, LoadedAsset};
+use bevy::asset::io::Reader;
+use bevy::asset::{Asset, AssetLoader, AsyncReadExt, BoxedFuture, LoadContext, LoadedAsset};
+use bevy::prelude::*;
 use std::marker::PhantomData;
+use thiserror::Error;
 
 /// Plugin to load your asset type `A` from json files.
 pub struct JsonAssetPlugin<A> {
@@ -10,14 +13,24 @@ pub struct JsonAssetPlugin<A> {
 
 impl<A> Plugin for JsonAssetPlugin<A>
 where
-    for<'de> A: serde::Deserialize<'de> + Asset,
+    for<'de> A: serde::Deserialize<'de> + Asset + Default,
 {
     fn build(&self, app: &mut App) {
-        app.add_asset::<A>().add_asset_loader(JsonAssetLoader::<A> {
-            extensions: self.extensions.clone(),
-            _marker: PhantomData,
-        });
+        app.init_asset::<A>()
+            .init_asset_loader::<JsonAssetLoader<A>>();
     }
+}
+
+/// Possible errors that can be produced by [`CustomAssetLoader`]
+#[non_exhaustive]
+#[derive(Debug, Error)]
+pub enum CustomAssetLoaderError {
+    /// An [IO](std::io) Error
+    #[error("Could load shader: {0}")]
+    Io(#[from] std::io::Error),
+    /// A [RON](ron) Error
+    #[error("Could not parse RON: {0}")]
+    RonSpannedError(#[from] ron::error::SpannedError),
 }
 
 impl<A> JsonAssetPlugin<A>
@@ -33,24 +46,34 @@ where
     }
 }
 
-struct JsonAssetLoader<A> {
+#[derive(Default)]
+struct JsonAssetLoader<A>
+where
+    A: Default,
+{
     extensions: Vec<&'static str>,
     _marker: PhantomData<A>,
 }
 
 impl<A> AssetLoader for JsonAssetLoader<A>
 where
-    for<'de> A: serde::Deserialize<'de> + Asset,
+    for<'de> A: serde::Deserialize<'de> + Asset + Default,
 {
+    type Asset = A;
+    type Settings = ();
+    type Error = CustomAssetLoaderError;
+
     fn load<'a>(
         &'a self,
-        bytes: &'a [u8],
+        reader: &'a mut Reader,
+        _settings: &'a Self::Settings,
         load_context: &'a mut LoadContext,
-    ) -> BoxedFuture<'a, Result<(), bevy::asset::Error>> {
+    ) -> BoxedFuture<'a, Result<Self::Asset, Self::Error>> {
         Box::pin(async move {
-            let asset = serde_json::from_slice::<A>(bytes)?;
-            load_context.set_default_asset(LoadedAsset::new(asset));
-            Ok(())
+            let mut bytes = Vec::new();
+            reader.read_to_end(&mut bytes).await?;
+            let mut asset: A = serde_json::from_slice(&bytes).expect("unable to decode asset");
+            Ok(asset)
         })
     }
 
