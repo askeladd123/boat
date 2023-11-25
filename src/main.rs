@@ -1,4 +1,4 @@
-#![allow(unused)]
+#![allow(unused, clippy::too_many_arguments, clippy::type_complexity)]
 
 use bevy::{
     gltf::{Gltf, GltfMesh, GltfNode},
@@ -284,7 +284,7 @@ fn wire_sensor_events(
             CollisionEvent::Started(entity1, entity2, ..) if *entity1 == player => {
                 for dock in dock_query.iter() {
                     if dock == *entity2 {
-                        player_data.dock_state = DockState::CloseTo(dock.clone());
+                        player_data.dock_state = DockState::CloseTo(dock);
                     }
                 }
             }
@@ -402,9 +402,8 @@ fn check_load_state(
     use bevy::asset::LoadState::*;
 
     let config_load_state = asset_server.get_load_state(asset_pool.config.id());
-    match config_load_state {
-        Failed => warn!("config file failed to load"),
-        _ => {}
+    if let Failed = config_load_state {
+        warn!("config file failed to load")
     }
     let load_states = [
         asset_server.get_load_state(asset_pool.bboxes.id()),
@@ -465,20 +464,20 @@ fn on_loaded_add_assets(
         .filter_map(|(k, v)| match k.strip_suffix("-trimesh") {
             None => None,
             Some(stripped) => {
-                let node = assets_gltf_nodes.get(&v).unwrap();
+                let node = assets_gltf_nodes.get(v).unwrap();
 
                 let transform = TransformBundle::from(node.transform);
                 let mesh = assets_mesh
                     .get(
                         &assets_gltf_mesh
-                            .get(&node.mesh.as_ref().unwrap())
+                            .get(node.mesh.as_ref().unwrap())
                             .unwrap()
                             .primitives[0]
                             .mesh,
                     )
                     .unwrap();
                 let collider =
-                    Collider::from_bevy_mesh(&mesh, &ComputedColliderShape::TriMesh).unwrap();
+                    Collider::from_bevy_mesh(mesh, &ComputedColliderShape::TriMesh).unwrap();
                 Some((stripped.into(), (transform, collider)))
             }
         })
@@ -490,7 +489,7 @@ fn on_loaded_add_assets(
         .filter_map(|(k, v)| match k.strip_suffix("-cylinder") {
             None => None,
             Some(stripped) => {
-                let node = assets_gltf_nodes.get(&v).unwrap();
+                let node = assets_gltf_nodes.get(v).unwrap();
 
                 let transform = TransformBundle::from(node.transform);
 
